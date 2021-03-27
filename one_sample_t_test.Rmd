@@ -1,0 +1,171 @@
+---
+title: "Untitled"
+author: "Gregor Mathes"
+date: "27 3 2021"
+output: 
+  html_document:
+    mathjax: "default"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+# Introduction  
+  
+I have a very weird relationship to statistics. Even though I was very bad at maths, I decided to study geosciences. I somehow managed to get through the Bachelor maths exams. For some reason, I then proceeded with a shiny new Master program called [Analytical Paleobiology](http://www.palaeobiology.de/) that was build around the R programming software and a lot of statistics (it's an amazing research-oriented programm with lots of fossils, stats and outreach courses). During the first lectures, we learned about frequentist null hypothesis testing and p-values. It was very confusing, and it is still today. We also learned how to use statistical tests such as a *t-test* or an *ANOVA*. It was even more confusing. We've got told that these tests are small little black-boxes and that we should not trust them. Then every one just proceeded to work with those black boxes, completely trusting them.  
+During that Master program I found my passion for stats and programming. Since then, I have read a lot of statistic textbooks and blogs, something that I could never explain my former self that disliked maths. With all this amazing new knowledge, a few things cleared up for me:  
+  
+1. frequentist null hypothesis testing makes no sense  
+2. p-values make no sense  
+3. statistical tests are just regression in disguise  
+  
+I somehow managed to avoid (1) and (2) by using resampling and permutation methods, and by sticking to effect sizes instead of p-values. Lately, I started to work with Bayesian estimates, completely ditching the frequentist approach (and I will never look back). But statistical tests are still important in my daily work-flow and I simply don't want to use black boxes anymore. So, basically as a resource to future me, I decided to start a series of blog posts on statistical tests. In each blog post, I will cover one commonly used statistical test and show that it's just a regression (and that you get much more power if you express the test as a regression model). I will then proceed to fit a Bayesian regression model for each test, because as John Kruschke states it in the amazing paper *Bayesian Estimation Supersedes the t Test*:  
+  
+> Some people may wonder which approach, Bayesian or NHST, is more often correct. This question has limited applicability because in real research we never know the ground truth; all we have is a sample of data. If we knew the ground truth, against which to compare the conclusion from the statistical analysis, we would not
+bother to collect the data. If the question of correctness is instead asked of some hypothetical data generator, the assessment is confined to that particular distribution of simulated data, which likely has only limited resemblance to real-world data encountered across research paradigms. Therefore, instead of asking which
+method is more often correct in some hypothetical world of simulated data, the relevant question is asking which method provides the richest, most informative, and meaningful results for any set of data. The answer is always Bayesian estimation.  
+  
+Additionally, using Bayesian estimation, we can quickly escape the omnipresent assumption of normality of many statistical tests. I will start in this blog post with the one sample t-test.  
+  
+# One sample t-test  
+  
+## When to use  
+  
+If you have one sample of measurements and you want to estimate the central tendency of this sample (e.g. the mean) compared to a specific value. For example, assume I want to test whether my males from my family tends to be smaller than the average male human height. If heights across my male family members are normally distributed, I can use the one sample t-test.  
+  
+## Assumptions  
+  
+Your sample should have the following characteristics:  
+  
+1. continuous (not discrete).  
+2. normally distributed    
+3. a random sample from its population with each individual in the population having an equal
+probability of being selected in the sample  
+  
+## As a regression  
+  
+All we need is a regression that approximates the mean of the sample. Back in high-school, we learned that the intercept of a regression line goes through the mean of the data. So all we need is a regression with an intercept and nothing less.  We can state this as $$\mu = \alpha$$ where $\alpha$ is the intercept and $\mu$ the height of each individual. Note that the t-test assumes that height is normally distributed, which we can express as $$height \sim Normal(\mu, \sigma)$$.  
+  
+# Comparing the test to the regression  
+  
+## The data  
+  
+First, we will simulate some data for my male family members height. By simulating the data, we know the true values and can therefore see how each method performs.  
+  
+```{r data sim}
+set.seed(1708)
+dat_height <- rnorm(100, 160, 2)
+
+head(dat_height)
+```  
+  
+So we just generated 100 height values from a normal distribution with mean 160 cm and a standard deviation of 2. Now we just need a value for the average height of all males. Google says that *The global mean height of adult men born in 1996 is 171 centimetres (cm)*.  
+  
+## The black box
+  
+Here's how you fit the one sample t-test in R:  
+  
+```{r t-test}
+result_ttest <- t.test(dat_height, mu = 171)
+```  
+  
+We just feed in our data and define the value to which the sample mean should be compared to using `mu = 171`. The output of this function is very verbose and it's really painful to extract any values from it.  
+  
+```{r print t-test}
+result_ttest
+```  
+  
+We get a p-value as output that states the probability to get a value of 159.882 cm (the mean from my male family members) if the true mean would be 171 cm (average male). The p-value is very low, certainly below many commonly used thresholds, so we could reject the null hypothesis. Are you already confused? Let's focus on the effect size instead. The mean of my male family members is 159.882, and those members are therefore `r 171 - 159.882` cm (171 - 159.882 cm) smaller as the average male. As we get a confidence interval for the mean as well, we can transform it as well:  
+  
+```{r t-test ci}
+ci_ttest <- result_ttest$conf.int %>% 
+  as.vector()
+171 - ci_ttest
+```  
+  
+So male members from my family are `r 171 - 159.882 %>% round(2)` cm smaller than the average human male, with a 95% CI of [`r 171 - ci_ttest %>% round(2)`].  
+  
+## The regression  
+  
+To fit a linear regression in R with just an intercept, we can use the formula `sample ~ 1`. But with this formula, any output that we get compares the mean to a threshold of 0. But we want it to be compared to a threshold of 171, the average human males height. So we need to subtract 170 from each sample first.  
+  
+```{r lm}
+result_lm <- lm(dat - 171 ~ 1) 
+```  
+  
+A real cool thing with this regression approach is that we get the direct difference in means. Let's take a look:  
+  
+```{r lm summary}
+summary(result_lm)
+```  
+  
+The p-value is similarly small and the difference is equal to the one sample t-test approach: My male family members are on average 11.12 cm smaller. We can get the confidence intervals with `confint()`.  
+  
+```{r lm confint}
+confint(result_lm)
+```  
+  
+Coolio, we obviously get the same results. It seems like the one sample t-test is just a regression in disguise.  
+# Bayesian regression  
+  
+Now we get to the gold standard, the Bayesian estimation. I will use the `brms` package for that, which is R's interface to the Stan language, using a Hamiltonian Markov Chain Monte Carlo and the Nuts sampler. Or as Andrew Heiss stated it in one of his blog posts:  
+> ... all the cool kids are using Stan.  
+  
+```{r bayes setup}
+library(brms)
+options(mc.cores = parallel::detectCores())  # Use all cores
+```  
+  
+For Bayesian analysis, we can additionally set a prior on the intercept. I will not go into detail, but notice that we can help the model to run by using our knowledge. We do this by setting a weakly informative prior on the intercept with a normal distribution with a mean of 170 and a standard deviation of 3. Why these specific values? Because most males I have seen in my life fall within this range, and it is just reasonable to assume that our sample has similar values. Either way, the prior is so broad that it is easily overwhelmed by the data (it *listens* to the data), but the model does not assume some very irrealistic values like a height of thousand meters for a human male, or even negative values. We can even visualise the prior:  
+  
+```{r prior}
+tibble(height = rnorm(1e5, 170, 10)) %>% 
+  ggplot(aes(height)) +
+  geom_density() +
+  theme_minimal()
+```  
+  
+And as we don't need to fiddle with the meaning of a p-value anymore, I will directly model the mean for our samples using the formule `dat_height ~ 1` and then compare these values to the average human male height using posterior samples.  
+
+  
+```{r brms}
+result_brms <- brm(
+  bf(dat_height ~ 1), 
+  prior = c(set_prior("normal(170, 10)", class = "Intercept")),
+  chains = 3, iter = 2000, warmup = 1000, data = tibble(dat_height = dat_height))
+```   
+  
+That's it. We can get a summary of this model as well:  
+  
+```{r brms summary}
+summary(result_brms)
+```  
+The Rhat values are equal 1 and the effective sample sizes are large, indicating low autocorrelation. So our model fitted just fine. The estimate shows the mean for my family members as well as 95% credible intervals. But stop, with frequentist approaches we get only point estimates like these, but with Bayesian estimation we get the whole distribution from the MCMC. Let's take a look:  
+  
+```{r posterior}
+result_posterior <- posterior_samples(result_brms)
+
+result_posterior %>% 
+  ggplot(aes(b_Intercept)) +
+  geom_density(colour = "grey20", fill = "firebrick", alpha = 0.8) +
+  labs(x = "Mean height", y = NULL) + 
+  theme_minimal() 
+```  
+  
+You see that we get aaaall the information we need. The whole distribution does not include the average human male height of 171 cm, so we can conclude that my male family members are credibly smaller than the average human male. We could even do some Bayesian hypothesis testing to prove this:  
+  
+```{r hypothesis}
+hypothesis(result_brms, "Intercept < 171")
+```  
+As the credible interval does not include zero and the evidence ratio is really high, we can accept the hypothesis that my family male members have a mean height smaller than 171 cm. What did I just say? Accepting a hypothesis is not possible, right? But this is only true for frequentist approeaches and not for Bayesian one.  This is basically what we wanted from the beginning. 
+
+
+
+
+
+
+
+
+
