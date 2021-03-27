@@ -46,7 +46,7 @@ probability of being selected in the sample
   
 ## As a regression  
   
-All we need is a regression that approximates the mean of the sample. Back in high-school, we learned that the intercept of a regression line goes through the mean of the data. So all we need is a regression with an intercept and nothing less.  We can state this as $$\mu = \alpha$$ where $\alpha$ is the intercept and $\mu$ the height of each individual. Note that the t-test assumes that height is normally distributed, which we can express as $$height \sim Normal(\mu, \sigma)$$.  
+All we need is a regression that approximates the mean of the sample. Back in high-school, we learned that the intercept of a regression line goes through the mean of the data. So all we need is a regression with an intercept and nothing less.  We can state this as $$\mu = \alpha$$ where $\alpha$ is the intercept and $\mu$ the height of each individual. Note that the t-test assumes that height is normally distributed, which we can express as $$height \sim Normal(\mu, \sigma)$$  
   
 # Comparing the test to the regression  
   
@@ -92,7 +92,7 @@ So male members from my family are `r 171 - 159.882 %>% round(2)` cm smaller tha
 To fit a linear regression in R with just an intercept, we can use the formula `sample ~ 1`. But with this formula, any output that we get compares the mean to a threshold of 0. But we want it to be compared to a threshold of 171, the average human males height. So we need to subtract 170 from each sample first.  
   
 ```{r lm}
-result_lm <- lm(dat - 171 ~ 1) 
+result_lm <- lm(dat_height - 171 ~ 1) 
 ```  
   
 A real cool thing with this regression approach is that we get the direct difference in means. Let's take a look:  
@@ -113,7 +113,7 @@ Coolio, we obviously get the same results. It seems like the one sample t-test i
 Now we get to the gold standard, the Bayesian estimation. I will use the `brms` package for that, which is R's interface to the Stan language, using a Hamiltonian Markov Chain Monte Carlo and the Nuts sampler. Or as Andrew Heiss stated it in one of his blog posts:  
 > ... all the cool kids are using Stan.  
   
-```{r bayes setup}
+```{r bayes setup, message=FALSE}
 library(brms)
 options(mc.cores = parallel::detectCores())  # Use all cores
 ```  
@@ -130,7 +130,7 @@ tibble(height = rnorm(1e5, 170, 10)) %>%
 And as we don't need to fiddle with the meaning of a p-value anymore, I will directly model the mean for our samples using the formule `dat_height ~ 1` and then compare these values to the average human male height using posterior samples.  
 
   
-```{r brms}
+```{r brms, message=FALSE, warning=FALSE, error=FALSE, results='hide'}
 result_brms <- brm(
   bf(dat_height ~ 1), 
   prior = c(set_prior("normal(170, 10)", class = "Intercept")),
@@ -141,8 +141,9 @@ That's it. We can get a summary of this model as well:
   
 ```{r brms summary}
 summary(result_brms)
+
 ```  
-The Rhat values are equal 1 and the effective sample sizes are large, indicating low autocorrelation. So our model fitted just fine. The estimate shows the mean for my family members as well as 95% credible intervals. But stop, with frequentist approaches we get only point estimates like these, but with Bayesian estimation we get the whole distribution from the MCMC. Let's take a look:  
+The Rhat values are equal 1 and the effective sample sizes are large, indicating low autocorrelation. So our model fitted just fine. One great advantage of Bayesian estimation  (and Hamiltonian MCMC in particular) is that the model would tell us if something is wrong.The estimate shows the mean for my family members as well as 95% credible intervals. But stop, with frequentist approaches we get only point estimates like these, but with Bayesian estimation we get the whole distribution from the MCMC. Let's take a look:  
   
 ```{r posterior}
 result_posterior <- posterior_samples(result_brms)
@@ -154,12 +155,50 @@ result_posterior %>%
   theme_minimal() 
 ```  
   
-You see that we get aaaall the information we need. The whole distribution does not include the average human male height of 171 cm, so we can conclude that my male family members are credibly smaller than the average human male. We could even do some Bayesian hypothesis testing to prove this:  
+You see that we get aaaall the information we need. What do I mean with that? We get a whole distribution instead of a point estimate (the best guess of ordinary least squares or maximum likelihood) or a range (the confidence interval). So we can take all samples into account and summarize them as we please, using the mean, median, mode and percentile intervals, highest posterior density intervals or credible intervals. We have the power. This is another great advantage of Bayesian estimation. Note also that the model assumes that the response variable (height) comes from a normal distribution. But we are not limited to that (as we are with the t-test and a basic ordinary least squares regression). We can simply change the link function for the response distribution with `family = ...`.    
+Now to the interpretation: The whole distribution does not include the average human male height of 171 cm, so we can conclude that my male family members are credibly smaller than the average human male. We could even do some Bayesian hypothesis testing to prove this:  
   
 ```{r hypothesis}
 hypothesis(result_brms, "Intercept < 171")
 ```  
-As the credible interval does not include zero and the evidence ratio is really high, we can accept the hypothesis that my family male members have a mean height smaller than 171 cm. What did I just say? Accepting a hypothesis is not possible, right? But this is only true for frequentist approeaches and not for Bayesian one.  This is basically what we wanted from the beginning. 
+As the credible interval does not include zero and the evidence ratio is really high, we can accept the hypothesis that my family male members have a mean height smaller than 171 cm. What did I just say? Accepting a hypothesis is not possible, right? But this is only true for frequentist approeaches and not for Bayesian one. The p-value of a frequentist approach gives us the probability for the data given a null hypothesis $$p(data | N_0)$$ Bayesian estimation instead gives us the probability of a hypothesis given the data $$p(N_0 | data)$$ This is basically what we wanted from the beginning.  
+  
+# Comparison  
+  
+Let's compare the estimates of all approaches.  
+  
+```{r comparison}
+tibble(Model = c("T-Test", 
+                 "OLS Regression", 
+                 "Bayesian Regression"),
+       Estimate = c(result_ttest$estimate - 171, 
+                    result_lm$coefficients, 
+                    fixef(result_brms)[1] - 171), 
+       Est_Error = c(result_ttest$stderr,
+                     summary(result_lm)$coefficients[2], 
+                     fixef(result_brms)[2]),
+       Lower_CI = c(result_ttest$conf.int[1] -171, 
+                    confint(result_lm)[1], 
+                    fixef(result_brms)[3] - 171), 
+       Upper_CI = c(result_ttest$conf.int[2] -171, 
+                    confint(result_lm)[2], 
+                    fixef(result_brms)[4] - 171),
+       p_Value = c(result_ttest$p.value, 
+                   summary(result_lm)$coefficients[4], 
+                   NA)) %>% 
+  mutate(across(Estimate:Upper_CI, round, 2)) %>% 
+  knitr::kable(digits = 100)
+```  
+  
+That looks very good. Note that the CI is a 95% confidence interval for the frequentist approaches, and a 95% credible interval for the Bayesian estimation. To sum this up: The t-test is nothing but a regression, and we can always do better than a OLS regression by using a Bayesian regression. Why? Because in stark contrast to all frequentist approaches, it gives us the answers we want.  
+  
+------
+
+```{r session info}
+sessionInfo()
+```
+
+
 
 
 
