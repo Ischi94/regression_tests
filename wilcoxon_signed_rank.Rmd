@@ -1,0 +1,317 @@
+---
+title: "Untitled"
+author: "Gregor Mathes"
+date: "1 4 2021"
+output: 
+  html_document:
+    mathjax: "default"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+# Introduction  
+  
+This is the second post for my series on statistical tests as regression models. I want to show that each classical stats test such as an ANOVA or a t-test are just linear regression models in disguise. After showing this concept for each test, I aim to build a Bayesian regression for each that supersedes both the classical test and the frequentist regression approach. You can find the other parts from the *statistical tests as regression* series [here](https://gregor-mathes.netlify.app/tags/regression-in-disguise/).  
+In this post, I will cover the non-parametric sibling of the one sample t-test, the Wilcoxon signed-rank test. I will use this opportunity to introduce rank-transformations for non-normal data.    
+  
+# Wilcoxon signed-rank test  
+  
+## When to use  
+  
+Similar to the one sample t-test (which I have covered in [another blog post](https://gregor-mathes.netlify.app/2021/03/27/regression-tests/)), the Wilcoxon signed-rank test can be applied to estimate the central tendency of a sample (e.g. the mean) compared to a specific value. For example, if I want to estimate whether the average IQ of my colleagues at University Bayreuth is above the overall average IQ of 100. The good thing about the Wilcoxon signed-rank test compared to the t-test is the relaxation of the assumption of normality. If you have evidence that the distribution of the response variable in your sample is non-normally distributed, you typically apply the Wilcoxon signed-rank test.  
+  
+## How does it work?  
+  
+The one sample t-test belongs to the parametric tests. That means that the test makes assumption about your data, and only under those assumptions the test will return reliable results. The Wilcoxon signed-rank test on the other hand is non-parametric and does not care about the underlying distribution. But how does that work? It turns out that within the black box of the test, all our data get transformed. Before the test is evaluated, the data gets ordered in signed ranks (hence the name). After transformation, the data is more or less Gaussian shaped, and then thrown in a one sample t-test. So the Wilcoxon signed-rank test is just a one sample t-test with some data transformation beforehand. And as we know how the t-test looks as a regression, we can quite easily disentangle the black box of the Wilcoxon test. But first, let's look at how signed rank transformation works.  
+  
+## Signed rank transformation  
+  
+If you have some data points, you can order them via their ranks from low to high. In R, you can do this via the `rank()` function.  
+  
+```{r rank}
+dat <- c(1, 5, 3, -2, 20, -5)
+
+dat %>% 
+  rank()
+```  
+  
+The lowest number (-5 in the example) gets assigned the rank 1. Now the signed rank transformation works quite similar. We just take the absolute of the data, rank it and then assign each data point the same sign it has before we took the absolute.  
+
+```{r signed rank}
+dat %>% 
+  abs() %>% 
+  rank() * sign(dat)
+```  
+  
+But why bother? It turns out that this transformation is able to make a non-normal distribution normally shaped. And this then allows us to apply various parametric tests (you shouldn't though, but let's keep that for later). 
+We can show this by sampling from a number of non-normal data, and then try to make them Gaussian shaped by applying the signed-rank transformation.  
+  
+```{r simulation raw}
+# simulate data from various distributions
+simulated_data <- tibble(log_normal = rlnorm(1e5), 
+       poisson = rpois(1e5, 10), 
+       binomial = rbinom(1e5, 10, 0.5), 
+       exponential = rexp(1e5)) %>% 
+  pivot_longer(cols = everything(), 
+               names_to = "distribution", 
+               values_to = "value") 
+
+# plot untransformed data
+simulated_data %>% 
+  ggplot(aes(value)) +
+  geom_density(fill = "grey50", colour = "grey10", 
+               alpha = 0.9) +
+  facet_wrap(~distribution, scale = "free") +
+  theme_minimal()
+```  
+  
+So that's the un-transformed simulated data. Now let's try to transform them.  
+  
+```{r simulation transformed}
+# define the transformation function
+signed_rank <-  function(x) {
+  sign(x) * rank(abs(x))
+}
+
+# apply the transformation to each distribution 
+simulated_data %>% 
+  group_by(distribution) %>%
+  mutate(trans_value = signed_rank(value)) %>% 
+  ggplot(aes(trans_value)) +
+  geom_density(fill = "grey50", colour = "grey10", 
+               alpha = 0.9) +
+  facet_wrap(~distribution, scale = "free") +
+  theme_minimal()
+```  
+  
+We can see that the transformation does not work properly on all distributions (especially for the binomial and the poisson data). This is because the rank-transformation works only for continuous data, and not for discrete. And on the other distributions, it seems like a mixture of a normal and a uniform distribution. The test is applied as a black box and you don't see these transformations, and that those transformations might fail. We will see how to overcome these problems with Bayesian estimation later on in this blog. But not only Bayesian estimation is capable to tackle these issues. There are frequentist ways for regression on discrete data as well. But all of this requires thinking, cross-checking, and plotting each step in the analysis. You won't tackle these issues with a classical test like. Even worse, if you throw the data in such a black box, it won't even tell you that something is wrong, or that it's assumptions are violated.    
+  
+## Assumptions  
+  
+Even though the Wilcoxon signed-rank test relaxes the normality assumption of the one sample t-test, it still relies on a number of assumption.  
+  
+1. continuous (not discrete) and measured on an interval scale    
+2. normally distributed    
+3. a random sample from its population with each individual in the population having an equal
+probability of being selected in the sample  
+  
+## As a regression  
+  
+We can simply take the regression formula for the one sample t-test after applying the signed-rank transformation. So all we need is a regression with an intercept and nothing less.  We can state this as $$\mu = \alpha$$ where $\alpha$ is the intercept and $\mu$ the height of each individual.  
+  
+# Comparing the test to the regression  
+  
+## The data  
+  
+I will generate data for chess games, because according to a stackexchange post, [The length of chess games tends to follow a log-normal distribution](https://chess.stackexchange.com/questions/2506/what-is-the-average-length-of-a-game-of-chess/4899#4899). If you would plot the data first and realize that it comes from a log-normal, you could easily transform it to a Gaussian curve instead of using rank-transformation. This would then result in an improved estimation compared to the Wilcoxon test. But we will come to that in a second. Here's the data, with values taken from the stackexchange post:  
+  
+```{r sim data}
+set.seed(1708)
+dat_chess <- rlnorm(1e5, 4.37, 0.45)
+
+dat_chess %>% 
+  as_tibble() %>% 
+  ggplot(aes(value)) +
+  geom_density(fill = "grey50", colour = "grey10", 
+               alpha = 0.9) +
+  labs(x = "Length of chess game") +
+  theme_minimal()
+
+```  
+  
+With this much data, all our p-value would be totally small (see the problem?). So I will sample 200 values from this total distribution.  
+  
+  
+```{r sample data}
+set.seed(1708)
+dat_chess <- sample(dat_chess, 200)
+```  
+  
+Our hypothesis is that the average chess game from this sample takes more than 75 minutes. Why? Because my total play time for online chess averages around this value, and I want to see where I am in terms of chess game longevity. 
+  
+## The black box  
+  
+We can just throw the data in the Wilcoxon signed-rank test and define the value we want to compare with `mu`. We can set our hypothesis specified above via `alternative = "greater"`.     
+  
+```{r wilcoxon test}
+wilcox.test(dat_chess, mu = 75, alternative = "greater")
+```  
+  
+We get a p-value below a arbitrarily chosen threshold and are hence able to reject the null hypothesis that our sample mean is equal or below 75 minutes. However, we should not stick to p-values and instead report effect sizes and confidence intervals. We can get these for the test by specifying that we want a (non-parametric) confidence interval.  
+  
+```{r wilcoxon test 2}
+wilcox.test(dat_chess, mu = 75,
+            alternative = "greater", conf.int = TRUE)
+
+```
+Interestingly, we get an infinite value for the upper bound of the confidence interval. That's because we conduct a one sided test as we only compare if our sample average is greater. To get a confidence interval on both sides, we need a two sided test.  
+  
+```{r wilcoxon test 3}
+wilcox_results <- wilcox.test(dat_chess, mu = 75, 
+                              alternative = "two.sided", conf.int = TRUE)
+
+wilcox_results
+```  
+  
+Looks good, the 95% CI does not include my average play time of 75 minutes.  
+  
+## The other black box  
+  
+Here's the proof that the Wilcoxon signed-rank test is a one sample t-test with sign-ranked transformed data:  
+  
+```{r t-test proof}
+
+dat_chess %>% 
+  signed_rank() %>% 
+  t.test(mu = 75)
+```  
+Huh, what happened here? We get different values for the confidence intervals and the estimate. But that's just because the t-test estimates the mean, while the Wilcoxon test estimates the median. The median is a bit more robust to outliers.  
+  
+## The regression  
+  
+We realized that the Wilcoxon test estimates the median, and that is a bit harder with frequentist regression. But here's the regression formula for the mean:  
+  
+```{r regression}
+ols_result <- lm(signed_rank(dat_chess) ~ 1)
+
+ols_result
+confint(ols_result)
+```  
+  
+This is the same as for the t-test on sign-ranked data.  
+  
+# Bayesian estimation  
+  
+## The model  
+  
+We could already see that we get into weird terrain with these parametric and non-parametric stuff. But reverend Bayes comes to the rescue. We can model the whole posterior distribution for our sample and can even verify the null hypothesis, not only reject it. And we are not bound to arbitrary thresholds, but can base our decision on the whole set of information, instead of point estimates. As I am playing chess from time to time, I know that most games are quite short but that some games tend to be extremely long. I have written the stackexchange post mentioned above and therefore have prior knowledge that the duration of chess games is log-normal distributed. We can use this information in the Bayesian model:  
+  
+```{r Bayesian regression, results='hide'}
+library(brms)
+options(mc.cores = parallel::detectCores())  # Use all cores
+
+
+bayes_result <- brm(
+  bf(dat_chess ~ 1), 
+  family = "lognormal",
+  prior = c(set_prior("normal(10, 10)", class = "Intercept")),
+  chains = 3, iter = 2000, warmup = 1000, data = tibble(dat_chess = dat_chess))
+```  
+  
+The model returns the posterior on the log-normal scale, so we should take the exponential for all values of the posterior later on. Note that I have set a rather non-informative prior on the mean. Let's take a look at the posterior.  
+  
+```{r posterior brms}
+result_posterior <- posterior_samples(bayes_result) 
+
+result_posterior %>% 
+  mutate(across(b_Intercept:sigma, exp)) %>% 
+  ggplot(aes(b_Intercept)) +
+  geom_density(colour = "grey20", fill = "coral2", alpha = 0.8) +
+  labs(x = "Mean height", y = NULL) + 
+  theme_minimal() 
+```  
+  
+And we can proceed to test our hypothesis:  
+  
+```{r hypothesis}
+
+hyp_test <- result_posterior %>% 
+  mutate(b_Intercept= exp(b_Intercept)) %>% 
+  hypothesis("b_Intercept > 75")
+
+hyp_test 
+```   
+It's `r hyp_test$hypothesis[[6]] %>% round(1)` times more likely that the average chess game from the sample takes more than 75 minutes, than that the average is less than 75 minutes.  
+  
+# Comparison  
+  
+As we simulated the data by ourselves, we can compare each method to the true value. We used a value of 4.37 for the log-normal mean, and 0.45 for the log-normal standard deviation. We need to transform the values for each method to the log-normal scale for a proper comparison.  
+  
+```{r comparison}
+dat_comparison <- tibble(method = c("OLS", 
+                  "Wilcoxon", 
+                  "Bayes"), 
+       mean = c(ols_result$coefficients[1] %>% log(), 
+                wilcox_results$estimate[1] %>% log(), 
+                fixef(bayes_result)[1]), 
+       mean_lower = c(confint(ols_result)[1]%>% log(), 
+                      wilcox_results$conf.int[1]%>% log(),
+                      fixef(bayes_result)[3]),
+       mean_upper = c(confint(ols_result)[2]%>% log(), 
+                      wilcox_results$conf.int[2]%>% log(),
+                      fixef(bayes_result)[4]),
+       sd = c(NA,
+              NA, 
+              posterior_summary(bayes_result)[2, 1]), 
+       sd_lower = c(NA,
+                    NA,
+                    posterior_summary(bayes_result)[2, 3]),
+       sd_upper = c(NA,
+                    NA,
+                    posterior_summary(bayes_result)[2, 4]))
+       
+
+dat_comparison %>% 
+  knitr::kable(digits = 3)
+```  
+  
+We can see that we get a whole posterior on sigma as well with Bayesian estimation. Let's visualize the comparison:  
+  
+```{r}
+dat_comparison %>% 
+  ggplot(aes(mean, method, 
+             xmin = mean_lower, 
+             xmax = mean_upper)) +
+  geom_vline(xintercept = 4.37, 
+             size = 2, colour = "coral2") +
+  geom_pointrange(size = 0.9) +
+  labs(x = "Log of the mean duration of chess games", 
+       y = NULL) +
+  theme_minimal()
+```  
+  
+We can transform that to the normal scale by taking the exponential:    
+  
+```{r standard deviantion}
+dat_comparison %>% 
+  mutate(across(mean:mean_upper, exp)) %>% 
+  ggplot(aes(mean, method, 
+             xmin = mean_lower, 
+             xmax = mean_upper)) +
+  geom_vline(xintercept = exp(4.37), 
+             size = 2, colour = "coral2") +
+  geom_pointrange(size = 0.9) +
+  labs(x = "Log of the mean duration of chess games", 
+       y = NULL) +
+  theme_minimal()
+```  
+  
+The Bayesian regression performs best, however the Wilcoxon test still is close to the true value. This shows that when all assumptions are met, the Wilcoxon test can still be a powerfull tool. Just don't use it without knowing what's going on. We can see that an ordinary least squares regression (OLS) is quite far off, because it models the mean and not the median. It is therefore less robust. And I would assume that the Wilcoxon test in R performs some extra steps and corrections that leads to the better estimate for our data.  
+  
+  
+# Conclusion  
+  
+The Wilcoxon test performs quite well but is a black box and should not be used. Of cause, if all assumptions are met, it is still fine to use this statistical test. But using Bayesian regression does not only result in better estimation, it gives us all information needed for a valid hypothesis testing and taking decisions with minimizing the expected loss.  
+  
+----
+```{r sessioninfo}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
