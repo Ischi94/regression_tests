@@ -165,7 +165,7 @@ Here's the proof that the Wilcoxon signed-rank test is a one sample t-test with 
 ```{r t-test proof}
 
 dat_chess %>% 
-  signed_rank() %>% 
+  signed_rank() %>%
   t.test(mu = 75)
 ```  
 Huh, what happened here? We get different values for the confidence intervals and the estimate. But that's just because the t-test estimates the mean, while the Wilcoxon test estimates the median. The median is a bit more robust to outliers.  
@@ -181,7 +181,26 @@ ols_result
 confint(ols_result)
 ```  
   
-This is the same as for the t-test on sign-ranked data.  
+This is the same as for the t-test on sign-ranked data. But we are not restricted to model the mean via regression. With the help of a quantile regression, we can model the median instead. But we need the `quantreg` package for this. Note that the `quantreg` package uses the sign ranking by default.    
+  
+```{r quantile regression, message=FALSE}
+library(quantreg)
+
+qr_result <- rq(dat_chess ~ 1)
+qr_result
+```  
+  
+We can get confidence intervals for the median via bootstrapping the standard deviation:  
+  
+```{r rq bootstrapped}
+qr_se <- summary(qr_result, se = "boot")[[3]][2] * 1.96
+  
+qr_confint <- c(qr_result$coefficients[[1]] - qr_se, 
+                c(qr_result$coefficients[[1]] + qr_se))
+qr_confint
+```  
+  
+  
   
 # Bayesian estimation  
   
@@ -231,25 +250,32 @@ It's `r hyp_test$hypothesis[[6]] %>% round(1)` times more likely that the averag
 As we simulated the data by ourselves, we can compare each method to the true value. We used a value of 4.37 for the log-normal mean, and 0.45 for the log-normal standard deviation. We need to transform the values for each method to the log-normal scale for a proper comparison.  
   
 ```{r comparison}
-dat_comparison <- tibble(method = c("OLS", 
-                  "Wilcoxon", 
-                  "Bayes"), 
+dat_comparison <- tibble(method = c("OLS",
+                                    "Quantreg",
+                                    "Wilcoxon",
+                                    "Bayes"), 
        mean = c(ols_result$coefficients[1] %>% log(), 
+                qr_result$coefficients[1] %>% log(),
                 wilcox_results$estimate[1] %>% log(), 
                 fixef(bayes_result)[1]), 
        mean_lower = c(confint(ols_result)[1]%>% log(), 
+                      qr_confint[1] %>% log(),
                       wilcox_results$conf.int[1]%>% log(),
                       fixef(bayes_result)[3]),
        mean_upper = c(confint(ols_result)[2]%>% log(), 
+                      qr_confint[2] %>% log(),
                       wilcox_results$conf.int[2]%>% log(),
                       fixef(bayes_result)[4]),
        sd = c(NA,
+              summary(qr_result, se = "boot")[[3]][2], 
               NA, 
               posterior_summary(bayes_result)[2, 1]), 
        sd_lower = c(NA,
                     NA,
+                    NA,
                     posterior_summary(bayes_result)[2, 3]),
        sd_upper = c(NA,
+                    NA,
                     NA,
                     posterior_summary(bayes_result)[2, 4]))
        
@@ -258,7 +284,7 @@ dat_comparison %>%
   knitr::kable(digits = 3)
 ```  
   
-We can see that we get a whole posterior on sigma as well with Bayesian estimation. Let's visualize the comparison:  
+We can see that we get a whole posterior on sigma as well with Bayesian estimation. Let's visualize the comparison with the actual value highlighted in red:  
   
 ```{r}
 dat_comparison %>% 
@@ -289,7 +315,7 @@ dat_comparison %>%
   theme_minimal()
 ```  
   
-The Bayesian regression performs best, however the Wilcoxon test still is close to the true value. This shows that when all assumptions are met, the Wilcoxon test can still be a powerfull tool. Just don't use it without knowing what's going on. We can see that an ordinary least squares regression (OLS) is quite far off, because it models the mean and not the median. It is therefore less robust. And I would assume that the Wilcoxon test in R performs some extra steps and corrections that leads to the better estimate for our data.  
+The Bayesian regression performs best, however the Wilcoxon test still is close to the true value, similar to the quantile regression. This shows that when all assumptions are met, the Wilcoxon test can still be a powerful tool. Just don't use it without knowing what's going on. We can see that an ordinary least squares regression (OLS) is quite far off, because it models the mean and not the median. It is therefore less robust. And I would assume that the Wilcoxon test in R performs some extra steps and corrections that leads to the better estimate for our data.  
   
   
 # Conclusion  
